@@ -372,7 +372,9 @@ cli({
     { name: "itemId", type: "string", required: true, help: "Target item ID." },
     { name: "date", type: "string", required: false, help: "Report date in YYYY-MM-DD. Defaults to today in Asia/Shanghai." },
     { name: "pageSize", type: "int", required: false, help: "Campaign page size. Defaults to 100." },
-    { name: "status", type: "string", required: false, help: "Campaign status filter. Defaults to start." }
+    { name: "status", type: "string", required: false, help: "Campaign status filter. Defaults to start." },
+    { name: "csrfId", type: "string", required: false, help: "Optional manual csrfId override." },
+    { name: "loginPointId", type: "string", required: false, help: "Optional manual loginPointId override." }
   ],
   columns: [
     "rowType",
@@ -403,6 +405,8 @@ cli({
     const date = typeof kwargs.date === "string" && kwargs.date ? kwargs.date : todayInChina();
     const pageSize = typeof kwargs.pageSize === "number" ? kwargs.pageSize : Number(kwargs.pageSize ?? 100);
     const status = typeof kwargs.status === "string" && kwargs.status ? kwargs.status : "start";
+    const manualCsrfId = typeof kwargs.csrfId === "string" ? kwargs.csrfId : "";
+    const manualLoginPointId = typeof kwargs.loginPointId === "string" ? kwargs.loginPointId : null;
     const capturedAt = buildCapturedAt();
     const observedUrls: string[] = [];
 
@@ -424,12 +428,14 @@ cli({
       { waitUntil: "domcontentloaded" }
     );
 
-    let tokens = { csrfId: "", loginPointId: null as string | null };
-    for (const delay of [1500, 2500, 4000]) {
-      await waitForSettledPage(page, delay);
-      tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
-      if (tokens.csrfId) {
-        break;
+    let tokens = { csrfId: manualCsrfId, loginPointId: manualLoginPointId };
+    if (!tokens.csrfId) {
+      for (const delay of [1500, 2500, 4000]) {
+        await waitForSettledPage(page, delay);
+        tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
+        if (tokens.csrfId) {
+          break;
+        }
       }
     }
 
