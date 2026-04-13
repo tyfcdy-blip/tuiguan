@@ -185,9 +185,24 @@ async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPoin
       return cookieMatch?.[1] ?? null;
     };
 
-    const state = (window as any).__INITIAL_STATE__;
-    const csrfId = getValue("csrfId") || state?.global?.csrfId || state?.csrfId || "";
-    const loginPointId = getValue("loginPointId") || state?.global?.loginPointId || state?.loginPointId || null;
+    const win = window as any;
+    const state = win.__INITIAL_STATE__ || {};
+    const globalState = state.global || {};
+
+    const csrfId =
+      getValue("csrfId") ||
+      globalState.csrfId ||
+      state.csrfId ||
+      win.csrfId ||
+      "";
+
+    const loginPointId =
+      getValue("loginPointId") ||
+      globalState.loginPointId ||
+      state.loginPointId ||
+      win.loginPointId ||
+      null;
+
     return { csrfId, loginPointId };
   });
 }
