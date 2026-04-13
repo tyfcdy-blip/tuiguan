@@ -106,6 +106,15 @@ function extractTokensFromUrl(rawUrl: string): { csrfId: string; loginPointId: s
   }
 }
 
+async function waitForSettledPage(page: any, milliseconds: number): Promise<void> {
+  if (typeof page.waitForTimeout === "function") {
+    await page.waitForTimeout(milliseconds);
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -415,7 +424,15 @@ cli({
       { waitUntil: "domcontentloaded" }
     );
 
-    const tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
+    let tokens = { csrfId: "", loginPointId: null as string | null };
+    for (const delay of [1500, 2500, 4000]) {
+      await waitForSettledPage(page, delay);
+      tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
+      if (tokens.csrfId) {
+        break;
+      }
+    }
+
     if (!tokens.csrfId) {
       throw new Error("Failed to read csrfId from the Wanxiangtai page. Ensure Chrome is logged in and the page is fully loaded.");
     }
