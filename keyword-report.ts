@@ -165,7 +165,7 @@ function computeTotalDealCost(metric: ReportMetric): number | null {
 }
 
 async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPointId: string | null }> {
-  return await page.evaluate(() => {
+  const direct = await page.evaluate(() => {
     const getValue = (key: string): string | null => {
       try {
         const fromStorage = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
@@ -173,10 +173,11 @@ async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPoin
           return fromStorage;
         }
       } catch {
-        return null;
+        // Ignore storage access errors and keep checking fallbacks.
       }
 
-      const globalValue = (window as any)[key];
+      const win = window as any;
+      const globalValue = win[key];
       if (typeof globalValue === "string" && globalValue) {
         return globalValue;
       }
@@ -204,6 +205,30 @@ async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPoin
       null;
 
     return { csrfId, loginPointId };
+  });
+
+  if (direct?.csrfId) {
+    return direct;
+  }
+
+  return await page.evaluate(() => {
+    const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+
+    for (const entry of entries) {
+      try {
+        const url = new URL(entry.name);
+        const csrfId = url.searchParams.get("csrfId");
+        const loginPointId = url.searchParams.get("loginPointId");
+
+        if (csrfId) {
+          return { csrfId, loginPointId };
+        }
+      } catch {
+        // Ignore malformed resource URLs.
+      }
+    }
+
+    return { csrfId: "", loginPointId: null };
   });
 }
 
@@ -346,7 +371,7 @@ cli({
       { waitUntil: "domcontentloaded" }
     );
 
-    const tokens = await readRuntimeTokens(page);
+    const tokens = (await readRuntimeTokens(page)) || { csrfId: "", loginPointId: null };
     if (!tokens.csrfId) {
       throw new Error("Failed to read csrfId from the Wanxiangtai page. Ensure Chrome is logged in and the page is fully loaded.");
     }
