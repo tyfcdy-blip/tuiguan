@@ -95,6 +95,11 @@ type OutputRow = {
   adzonePkgIdList: string;
 };
 
+type ScrapedTable = {
+  headers: string[];
+  rows: string[][];
+};
+
 const SITE_URL = "https://one.alimama.com/index.html#!/manage/search";
 const BIZ_CODE = "onebpSearch";
 const FIND_PAGE_PATH = "/campaign/horizontal/findPage.json";
@@ -132,6 +137,98 @@ function asNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function parseNumberFromText(value: string): number | null {
+  const cleaned = value.replace(/,/g, "");
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+function pickValue(row: Record<string, string>, keys: string[]): string {
+  for (const key of keys) {
+    if (row[key]) {
+      return row[key];
+    }
+  }
+  return "";
+}
+
+function mapScrapedRow(
+  itemId: string,
+  capturedAt: string,
+  date: string,
+  row: Record<string, string>
+): OutputRow | null {
+  const planCell = pickValue(row, ["计划", "计划 "]);
+  const campaignName = normalizeText(planCell.split("计划组：")[0] || planCell);
+  const campaignIdText = pickValue(row, ["计划ID"]);
+  const isSummary = campaignName.includes("合计") || campaignIdText === "-" || campaignIdText === "";
+
+  if (!isSummary && !campaignIdText) {
+    return null;
+  }
+
+  return {
+    rowType: isSummary ? "summary" : "campaign",
+    itemId,
+    capturedAt,
+    date,
+    campaignId: isSummary ? "SUMMARY" : normalizeText(campaignIdText),
+    campaignName: isSummary ? "summary" : campaignName,
+    budget: parseNumberFromText(pickValue(row, ["预算"])),
+    charge: parseNumberFromText(pickValue(row, ["花费"])),
+    roi: parseNumberFromText(pickValue(row, ["投入产出比"])),
+    ecpc: parseNumberFromText(pickValue(row, ["平均点击花费", "平均点击花费(元)"])),
+    ctr: parseNumberFromText(pickValue(row, ["点击率"])),
+    cvr: parseNumberFromText(pickValue(row, ["点击转化率"])),
+    cartRate: parseNumberFromText(pickValue(row, ["加购率"])),
+    cartCost: parseNumberFromText(pickValue(row, ["加购成本", "加购成本(元)"])),
+    totalDealCost: parseNumberFromText(pickValue(row, ["总成交成本", "总成交成本(元)"])),
+    adPv: parseNumberFromText(pickValue(row, ["展现量"])),
+    click: parseNumberFromText(pickValue(row, ["点击量"])),
+    adzonePkgIdList: ""
+  };
+}
+
+async function scrapeCampaignTable(page: any): Promise<ScrapedTable | null> {
+  return await page.evaluate(() => {
+    const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+    const tables = Array.from(document.querySelectorAll("table"));
+
+    for (const table of tables) {
+      const headers = Array.from(table.querySelectorAll("thead th"))
+        .map((node) => normalize((node as HTMLElement).innerText || ""))
+        .filter(Boolean);
+
+      if (!headers.length) {
+        continue;
+      }
+
+      const joined = headers.join("|");
+      const looksLikeCampaignTable =
+        joined.includes("计划ID") &&
+        joined.includes("预算") &&
+        joined.includes("花费") &&
+        joined.includes("投入产出比");
+
+      if (!looksLikeCampaignTable) {
+        continue;
+      }
+
+      const rows = Array.from(table.querySelectorAll("tbody tr")).map((tr) =>
+        Array.from(tr.querySelectorAll("td")).map((td) => normalize((td as HTMLElement).innerText || ""))
+      );
+
+      return { headers, rows };
+    }
+
+    return null;
+  });
 }
 
 function safeDivide(numerator: number | null, denominator: number | null): number | null {
@@ -483,113 +580,27 @@ cli({
       throw new Error("Failed to read csrfId from the Wanxiangtai page. Ensure Chrome is logged in and the page is fully loaded.");
     }
 
-    const findPageBody = {
-      itemId: Number(itemId),
-      offset: 0,
-      pageSize,
-      statusList: [status],
-      searchDetentTypeList: ["first_place"],
-      queryRuleAuto: "1",
-      rptQuery: {
-        fields: "charge,roi,adPv,click,ctr,ecpc,cartInshopNum,cartRate,cartCost,alipayInshopAmt,cvr,alipayDirAmt,cartDirNum,alipayInshopNum,alipayDirNum,alipayIndirAmt,alipayIndirNum,cartIndirNum",
-        conditionList: [
-          {
-            sourceList: ["scene", "campaign_list"],
-            startTime: date,
-            endTime: date,
-            isRt: true
-          }
-        ]
-      }
-    };
-
-    const findPageResult = await postJson<FindPageResponse>(
-      page,
-      FIND_PAGE_PATH,
-      { csrfId: tokens.csrfId, bizCode: BIZ_CODE },
-      findPageBody
-    );
-
-    if (!findPageResult.ok || !findPageResult.data) {
-      throw new Error(
-        `findPage.json request failed: HTTP ${findPageResult.status} ${findPageResult.statusText}; body=${(findPageResult.text || "").slice(0, 500)}`
-      );
+    await waitForSettledPage(page, 3000);
+    const scraped = await scrapeCampaignTable(page);
+    if (!scraped) {
+      throw new Error("Failed to locate the campaign table in the rendered page.");
     }
 
-    const findPage = findPageResult.data;
-    if (findPage.info?.ok === false) {
-      throw new Error(findPage.info.message || "findPage.json returned a failed status.");
+    const rows: OutputRow[] = [];
+    for (const cells of scraped.rows) {
+      if (cells.length < scraped.headers.length || cells.every((cell) => !cell)) {
+        continue;
+      }
+
+      const row = Object.fromEntries(scraped.headers.map((header, index) => [header, cells[index] || ""]));
+      const mapped = mapScrapedRow(itemId, capturedAt, date, row);
+      if (mapped) {
+        rows.push(mapped);
+      }
     }
 
-    const campaignRows = findPage.data?.list ?? [];
-    const campaignIds = collectCampaignIds(campaignRows);
-    const adzonePkgIds = collectAdzonePkgIds(campaignRows);
-
-    let summaryMetric: ReportMetric | undefined;
-    if (campaignIds.length > 0 && adzonePkgIds.length > 0) {
-      const summaryBody: Record<string, unknown> = {
-        bizCode: BIZ_CODE,
-        byPage: false,
-        fromRealTime: true,
-        startTime: date,
-        endTime: date,
-        splitType: "sum",
-        computeType: "sum",
-        sourceList: ["scene", "campaign_list"],
-        queryDomains: [],
-        queryFieldIn: [
-          "charge",
-          "roi",
-          "adPv",
-          "click",
-          "ctr",
-          "ecpc",
-          "cartInshopNum",
-          "cartRate",
-          "cartCost",
-          "alipayInshopAmt",
-          "cvr",
-          "alipayDirAmt",
-          "cartDirNum",
-          "alipayInshopNum",
-          "alipayDirNum",
-          "alipayIndirAmt",
-          "alipayIndirNum",
-          "cartIndirNum"
-        ],
-        adzonePkgIdIn: adzonePkgIds,
-        strategyCampaignIdIn: campaignIds,
-        csrfId: tokens.csrfId
-      };
-
-      if (tokens.loginPointId) {
-        summaryBody.loginPointId = tokens.loginPointId;
-      }
-
-      const summaryResult = await postJson<SummaryResponse>(
-        page,
-        SUMMARY_PATH,
-        { csrfId: tokens.csrfId, bizCode: BIZ_CODE },
-        summaryBody
-      );
-
-      if (!summaryResult.ok || !summaryResult.data) {
-        throw new Error(
-          `report/query.json request failed: HTTP ${summaryResult.status} ${summaryResult.statusText}; body=${(summaryResult.text || "").slice(0, 500)}`
-        );
-      }
-
-      const summary = summaryResult.data;
-      if (summary.info?.ok === false) {
-        throw new Error(summary.info.message || "report/query.json returned a failed status.");
-      }
-
-      summaryMetric = summary.data?.list?.[0];
-    }
-
-    const rows = campaignRows.map((row) => toOutputRow(itemId, capturedAt, date, row));
-    if (summaryMetric) {
-      rows.push(toSummaryRow(itemId, capturedAt, date, summaryMetric));
+    if (!rows.length) {
+      throw new Error("Campaign table was found, but no usable rows were parsed.");
     }
 
     return rows;
