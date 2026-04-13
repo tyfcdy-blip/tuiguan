@@ -128,6 +128,39 @@ async function waitForSettledPage(page: any, milliseconds: number): Promise<void
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+async function waitForCampaignTable(page: any, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const found = await page.evaluate(() => {
+      const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+      const tables = Array.from(document.querySelectorAll("table"));
+
+      return tables.some((table) => {
+        const headers = Array.from(table.querySelectorAll("thead th"))
+          .map((node) => normalize((node as HTMLElement).innerText || ""))
+          .filter(Boolean);
+
+        const joined = headers.join("|");
+        return (
+          joined.includes("计划ID") &&
+          joined.includes("预算") &&
+          joined.includes("花费") &&
+          joined.includes("投入产出比")
+        );
+      });
+    });
+
+    if (found) {
+      return true;
+    }
+
+    await waitForSettledPage(page, 1000);
+  }
+
+  return false;
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -565,22 +598,11 @@ cli({
       { waitUntil: "domcontentloaded" }
     );
 
-    let tokens = { csrfId: manualCsrfId, loginPointId: manualLoginPointId };
-    if (!tokens.csrfId) {
-      for (const delay of [1500, 2500, 4000]) {
-        await waitForSettledPage(page, delay);
-        tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
-        if (tokens.csrfId) {
-          break;
-        }
-      }
+    const tableReady = await waitForCampaignTable(page, 30000);
+    if (!tableReady) {
+      throw new Error("Timed out waiting for the keyword promotion campaign table to load.");
     }
 
-    if (!tokens.csrfId) {
-      throw new Error("Failed to read csrfId from the Wanxiangtai page. Ensure Chrome is logged in and the page is fully loaded.");
-    }
-
-    await waitForSettledPage(page, 3000);
     const scraped = await scrapeCampaignTable(page);
     if (!scraped) {
       throw new Error("Failed to locate the campaign table in the rendered page.");
