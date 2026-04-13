@@ -66,6 +66,14 @@ type SummaryResponse = {
   };
 };
 
+type JsonEnvelope<T> = {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  data?: T;
+  text?: string;
+};
+
 type OutputRow = {
   rowType: "campaign" | "summary";
   itemId: string;
@@ -276,7 +284,7 @@ async function postJson<T>(
   path: string,
   query: Record<string, string>,
   body: Record<string, unknown>
-): Promise<T> {
+): Promise<JsonEnvelope<T>> {
   return await page.evaluate(
     async ({ requestPath, requestQuery, requestBody }: PostJsonArgs) => {
       const url = new URL(requestPath, "https://one.alimama.com");
@@ -292,7 +300,21 @@ async function postJson<T>(
         body: JSON.stringify(requestBody)
       });
 
-      return await response.json();
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = undefined;
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        text
+      };
     },
     { requestPath: path, requestQuery: query, requestBody: body }
   );
@@ -463,13 +485,20 @@ cli({
       }
     };
 
-    const findPage = await postJson<FindPageResponse>(
+    const findPageResult = await postJson<FindPageResponse>(
       page,
       FIND_PAGE_PATH,
       { csrfId: tokens.csrfId, bizCode: BIZ_CODE },
       findPageBody
     );
 
+    if (!findPageResult.ok || !findPageResult.data) {
+      throw new Error(
+        `findPage.json request failed: HTTP ${findPageResult.status} ${findPageResult.statusText}; body=${(findPageResult.text || "").slice(0, 500)}`
+      );
+    }
+
+    const findPage = findPageResult.data;
     if (findPage.info?.ok === false) {
       throw new Error(findPage.info.message || "findPage.json returned a failed status.");
     }
@@ -519,13 +548,20 @@ cli({
         summaryBody.loginPointId = tokens.loginPointId;
       }
 
-      const summary = await postJson<SummaryResponse>(
+      const summaryResult = await postJson<SummaryResponse>(
         page,
         SUMMARY_PATH,
         { csrfId: tokens.csrfId, bizCode: BIZ_CODE },
         summaryBody
       );
 
+      if (!summaryResult.ok || !summaryResult.data) {
+        throw new Error(
+          `report/query.json request failed: HTTP ${summaryResult.status} ${summaryResult.statusText}; body=${(summaryResult.text || "").slice(0, 500)}`
+        );
+      }
+
+      const summary = summaryResult.data;
       if (summary.info?.ok === false) {
         throw new Error(summary.info.message || "report/query.json returned a failed status.");
       }
