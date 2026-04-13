@@ -92,6 +92,20 @@ const BIZ_CODE = "onebpSearch";
 const FIND_PAGE_PATH = "/campaign/horizontal/findPage.json";
 const SUMMARY_PATH = "/report/query.json";
 
+function extractTokensFromUrl(rawUrl: string): { csrfId: string; loginPointId: string | null } | null {
+  try {
+    const url = new URL(rawUrl);
+    const csrfId = url.searchParams.get("csrfId");
+    const loginPointId = url.searchParams.get("loginPointId");
+    if (!csrfId) {
+      return null;
+    }
+    return { csrfId, loginPointId };
+  } catch {
+    return null;
+  }
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -164,7 +178,17 @@ function computeTotalDealCost(metric: ReportMetric): number | null {
   return safeDivide(m.charge, m.alipayInshopNum + m.alipayDirNum + m.alipayIndirNum);
 }
 
-async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPointId: string | null }> {
+async function readRuntimeTokens(
+  page: any,
+  observedUrls: string[] = []
+): Promise<{ csrfId: string; loginPointId: string | null }> {
+  for (const observedUrl of observedUrls) {
+    const token = extractTokensFromUrl(observedUrl);
+    if (token?.csrfId) {
+      return token;
+    }
+  }
+
   const direct = await page.evaluate(() => {
     const getValue = (key: string): string | null => {
       try {
@@ -211,7 +235,7 @@ async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPoin
     return direct;
   }
 
-  return await page.evaluate(() => {
+  const fromPerformance = await page.evaluate(() => {
     const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
 
     for (const entry of entries) {
@@ -230,6 +254,12 @@ async function readRuntimeTokens(page: any): Promise<{ csrfId: string; loginPoin
 
     return { csrfId: "", loginPointId: null };
   });
+
+  if (fromPerformance?.csrfId) {
+    return fromPerformance;
+  }
+
+  return { csrfId: "", loginPointId: null };
 }
 
 async function postJson<T>(
@@ -365,13 +395,27 @@ cli({
     const pageSize = typeof kwargs.pageSize === "number" ? kwargs.pageSize : Number(kwargs.pageSize ?? 100);
     const status = typeof kwargs.status === "string" && kwargs.status ? kwargs.status : "start";
     const capturedAt = buildCapturedAt();
+    const observedUrls: string[] = [];
+
+    if (typeof page.on === "function") {
+      page.on("response", (response: any) => {
+        try {
+          const url = typeof response?.url === "function" ? response.url() : response?.url;
+          if (typeof url === "string") {
+            observedUrls.push(url);
+          }
+        } catch {
+          // Ignore network listener errors.
+        }
+      });
+    }
 
     await page.goto(
       `${SITE_URL}?offset=0&statusList=${encodeURIComponent(status)}&searchKey=itemId&searchValue=${encodeURIComponent(itemId)}&pageSize=${pageSize}`,
       { waitUntil: "domcontentloaded" }
     );
 
-    const tokens = (await readRuntimeTokens(page)) || { csrfId: "", loginPointId: null };
+    const tokens = (await readRuntimeTokens(page, observedUrls)) || { csrfId: "", loginPointId: null };
     if (!tokens.csrfId) {
       throw new Error("Failed to read csrfId from the Wanxiangtai page. Ensure Chrome is logged in and the page is fully loaded.");
     }
