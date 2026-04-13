@@ -1,0 +1,16 @@
+{
+  "name": "opencli-plugin-wanxiangtai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenCLI plugin for fetching Wanxiangtai keyword promotion data",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jackwener/opencli": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
