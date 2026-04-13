@@ -2,5 +2,5 @@
   "name": "wanxiangtai",
   "version": "0.1.0",
   "description": "Fetch Wanxiangtai keyword promotion plan data with OpenCLI",
-  "entry": "src/keyword-report.ts"
+  "entry": "keyword-report.ts"
 }
