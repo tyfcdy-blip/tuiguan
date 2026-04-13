@@ -285,39 +285,57 @@ async function postJson<T>(
   query: Record<string, string>,
   body: Record<string, unknown>
 ): Promise<JsonEnvelope<T>> {
-  return await page.evaluate(
+  const result = await page.evaluate(
     async ({ requestPath, requestQuery, requestBody }: PostJsonArgs) => {
-      const url = new URL(requestPath, "https://one.alimama.com");
-      Object.entries(requestQuery).forEach(([key, value]) => url.searchParams.set(key, value));
-
-      const response = await fetch(url.toString(), {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          "x-requested-with": "XMLHttpRequest"
-        },
-        body: JSON.stringify(requestBody)
-      });
-
-      const text = await response.text();
-      let data;
       try {
-        data = JSON.parse(text);
-      } catch {
-        data = undefined;
-      }
+        const url = new URL(requestPath, "https://one.alimama.com");
+        Object.entries(requestQuery).forEach(([key, value]) => url.searchParams.set(key, value));
 
-      return {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        data,
-        text
-      };
+        const response = await fetch(url.toString(), {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "content-type": "application/json",
+            "x-requested-with": "XMLHttpRequest"
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = undefined;
+        }
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          data,
+          text
+        };
+      } catch {
+        return {
+          ok: false,
+          status: 0,
+          statusText: "FETCH_ERROR",
+          data: undefined,
+          text: "fetch failed inside page.evaluate"
+        };
+      }
     },
     { requestPath: path, requestQuery: query, requestBody: body }
   );
+
+  return result || {
+    ok: false,
+    status: 0,
+    statusText: "EMPTY_RESULT",
+    data: undefined,
+    text: "page.evaluate returned undefined"
+  };
 }
 
 function collectCampaignIds(rows: CampaignRow[]): Array<number | string> {
